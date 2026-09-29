@@ -1,0 +1,4 @@
+pip
+python-dotenv
+flask
+google-api-python-client
