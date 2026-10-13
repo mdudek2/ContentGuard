@@ -5,6 +5,8 @@ videos from search results.
 
 ## Requirements
 
+- python
+- pip
 - Ollama
 - ahmadwaqar/smolvlm2-500m-video:latest
 - A Google Developer Account and API key (Needed to communicate with the Youtube API)
