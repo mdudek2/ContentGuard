@@ -1,120 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Search App</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 900px;
-            margin: 40px auto;
-            padding: 20px;
-            text-align: center;
-        }
-        form {
-            margin-bottom: 30px;
-        }
-        input[type="text"] {
-            width: 65%;
-            padding: 10px;
-            font-size: 16px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        button {
-            padding: 10px 18px;
-            font-size: 16px;
-            background-color: #ff0000;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #cc0000;
-        }
-        .results-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-            gap: 20px;
-            text-align: left;
-        }
-        .card {
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #fff;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .card img {
-            width: 100%;
-            height: auto;
-            display: block;
-        }
-        .card-content {
-            padding: 12px;
-        }
-        .card-title {
-            font-size: 15px;
-            font-weight: bold;
-            margin: 0 0 8px 0;
-            color: #333;
-        }
-        .card-channel {
-            font-size: 13px;
-            color: #666;
-            margin-bottom: 10px;
-        }
-        .watch-link {
-            display: inline-block;
-            font-size: 13px;
-            color: #0066cc;
-            text-decoration: none;
-            font-weight: bold;
-        }
-    </style>
-</head>
-<body>
-
+    <title>ContentGuard Safety Filter</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
     <h1>ContentGuard Safety Filter</h1>
-    
+    <p> Search YouTube for videos whose thumbnails pass AI-assisted content moderation. </p>
     <form action="/" method="POST">
-        <input 
-            type="text" 
-            name="search_query" 
-            placeholder="Search YouTube..." 
-            value="{{ query }}" 
-            required
-        >
-        <button type="submit">Search</button>
-    </form>
-
-    {% if query %}
-        <h2>Search Results for "{{ query }}":</h2>
-        {% if results %}
-            <div class="results-grid">
-                {% for video in results %}
-                    <div class="card">
-                        <img src="{{ video.thumbnail }}" alt="{{ video.title }}">
-                        <div class="card-content">
-                            <div class="card-title">{{ video.title }}</div>
-                            <div class="card-channel">{{ video.channel }}</div>
-                            <a 
-                                class="watch-link" 
-                                href="https://www.youtube.com/watch?v={{ video.video_id }}" 
-                                target="_blank"
-                            >
-                                Watch Video &rarr;
-                            </a>
-                        </div>
-                    </div>
-                {% endfor %}
-            </div>
-        {% else %}
-            <p>No videos found.</p>
-        {% endif %}
-    {% endif %}
-
-</body>
+      <input type="text" name="search_query" placeholder="Search YouTube..." value="{{ query }}" required>
+      <button type="submit">Search</button>
+    </form> {% if query %} <h2>Search Results for "{{ query }}":</h2> {% if results %} <p class="status"> {{ results|length }} video(s) passed the thumbnail filter. </p>
+    <div class="results-grid"> {% for video in results %} <div class="card">
+        <a href="https://www.youtube.com/watch?v={{ video.videoid }}" target="blank" rel="noopener noreferrer" aria-label="Watch {{ video.title }}">
+          <img src="{{ video.thumbnail }}" alt="Thumbnail for {{ video.title }}" loading="lazy">
+        </a>
+        <div class="card-content">
+          <div class="card-title"> {{ video.title }} </div>
+          <div class="card-channel"> {{ video.channel }} </div>
+          <a class="watch-link" href="https://www.youtube.com/watch?v={{ video.videoid }}" target="blank" rel="noopener noreferrer"> Watch Video &rarr; </a>
+        </div>
+      </div> {% endfor %} </div> {% else %} <p class="empty-results"> No videos passed the thumbnail filter. Try another search. </p> {% endif %} {% endif %}
+  </body>
 </html>
