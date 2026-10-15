@@ -99,6 +99,8 @@ def download_thumbnail(video_id, thumbnails):
 def moderate_thumbnail(image_path):
     """Classify a thumbnail using Ollama's JSON schema output."""
 
+    raw_response = ""
+
     schema = {
         "type": "object",
         "properties": {
@@ -108,6 +110,7 @@ def moderate_thumbnail(image_path):
             },
             "reason": {
                 "type": "string",
+                "maxLength": 160,
             },
         },
         "required": ["classification", "reason"],
@@ -127,14 +130,18 @@ def moderate_thumbnail(image_path):
                 {
                     "role": "system",
                     "content": (
-                        "You are a video thumbnail content "
-                        "moderation classifier. Examine the "
-                        "provided image and decide whether it "
-                        "contains clearly visible inappropriate "
-                        "content. INAPPROPRIATE means explicit "
-                        "sexual imagery, nudity, graphic violence, "
-                        "or gore. SAFE means none of these are "
-                        "clearly visible."
+                        "You are a video thumbnail content moderation "
+                        "classifier. Classify only the visible content. "
+                        "INAPPROPRIATE means clearly visible explicit sexual "
+                        "imagery, nudity, graphic violence, or gore. "
+                        "SAFE means none of these are clearly visible. "
+                        "Only classify a thumbnail as SAFE if it is appropriate for children"
+                        "Do not classify explicit sexual content as SAFE."
+                        "Return exactly one JSON object matching the schema. "
+                        "The classification must be SAFE or INAPPROPRIATE. "
+                        "The reason must be one short factual sentence, "
+                        "maximum 15 words. Do not provide a detailed "
+                        "explanation, analysis, speculation, or preamble."
                     ),
                 },
                 {
@@ -148,6 +155,7 @@ def moderate_thumbnail(image_path):
             ],
             "options": {
                 "temperature": 0,
+                "num_predict": 100,
             },
         }
 
@@ -158,7 +166,8 @@ def moderate_thumbnail(image_path):
         )
         response.raise_for_status()
 
-        raw_response = response.json()["message"]["content"]
+        response_data = response.json()
+        raw_response = response_data["message"]["content"]
 
         result = json.loads(raw_response)
 
@@ -173,11 +182,32 @@ def moderate_thumbnail(image_path):
                 "Unknown classification",
             )
 
-        return classification, str(reason), raw_response, ""
+        if not isinstance(reason, str):
+            return (
+                "ERROR",
+                "",
+                raw_response,
+                "Invalid reason type",
+            )
 
-    except (requests.RequestException, OSError, ValueError,
-            KeyError, TypeError) as exc:
-        return "ERROR", "", "", str(exc)
+        return classification, reason, raw_response, ""
+
+    except json.JSONDecodeError as exc:
+        return (
+            "ERROR",
+            "",
+            raw_response,
+            f"Invalid JSON response: {exc}",
+        )
+
+    except (
+        requests.RequestException,
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        return "ERROR", "", raw_response, str(exc)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
