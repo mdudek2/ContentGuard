@@ -18,7 +18,7 @@ THUMBNAIL_DIR = Path("./thumbnails")
 THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 CSV_PATH = Path("./thumbnail_moderation.csv")
 OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "ahmadwaqar/smolvlm2-500m-video:latest"
+OLLAMA_MODEL = "minicpm-v4.6:latest"
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 app = Flask(__name__)
@@ -96,26 +96,14 @@ def download_thumbnail(video_id, thumbnails):
 
     return None
 
+import base64
+import json
+import re
+import requests
+
 def moderate_thumbnail(image_path):
-    """Classify a thumbnail using Ollama's JSON schema output."""
-
+    """Classify a thumbnail using Ollama with a robust regex JSON scavenger."""
     raw_response = ""
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "classification": {
-                "type": "string",
-                "enum": ["SAFE", "INAPPROPRIATE"],
-            },
-            "reason": {
-                "type": "string",
-                "maxLength": 160,
-            },
-        },
-        "required": ["classification", "reason"],
-        "additionalProperties": False,
-    }
 
     try:
         image_base64 = base64.b64encode(
@@ -125,37 +113,30 @@ def moderate_thumbnail(image_path):
         payload = {
             "model": OLLAMA_MODEL,
             "stream": False,
-            "format": schema,
+            "format": "json",
             "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "You are a video thumbnail content moderation "
-                        "classifier. Classify only the visible content. "
-                        "INAPPROPRIATE means clearly visible explicit sexual "
-                        "imagery, nudity, graphic violence, or gore. "
-                        "SAFE means none of these are clearly visible. "
-                        "Only classify a thumbnail as SAFE if it is appropriate for children"
-                        "Do not classify explicit sexual content as SAFE."
-                        "Return exactly one JSON object matching the schema. "
-                        "The classification must be SAFE or INAPPROPRIATE. "
-                        "The reason must be one short factual sentence, "
-                        "maximum 15 words. Do not provide a detailed "
-                        "explanation, analysis, speculation, or preamble."
+                        "You are a strict API microservice. Your ONLY output must be a raw JSON object "
+                        "with no markdown formatting, no code blocks, and no extra text. "
+                        "The JSON must look like this exact template: "
+                        '{"classification": "SAFE", "reason": "short sentence here"}\n'
+                        "Rules:\n"
+                        "1. classification must be 'SAFE' or 'INAPPROPRIATE'.\n"
+                        "2. reason must be under 15 words.\n"
+                        "3. Do not include markdown ticks like ```json."
                     ),
                 },
                 {
                     "role": "user",
-                    "content": (
-                        "Classify this thumbnail now. Choose "
-                        "exactly one permitted classification."
-                    ),
+                    "content": "Classify this image now.",
                     "images": [image_base64],
                 },
             ],
             "options": {
                 "temperature": 0,
-                "num_predict": 100,
+                "num_predict": 400,
             },
         }
 
@@ -167,9 +148,43 @@ def moderate_thumbnail(image_path):
         response.raise_for_status()
 
         response_data = response.json()
-        raw_response = response_data["message"]["content"]
+        raw_response = response_data.get("message", {}).get("content", "").strip()
 
-        result = json.loads(raw_response)
+        # --- ADVANCED JSON EXTRACTION & REPAIR ---
+        result = None
+        
+        # Attempt 1: Direct load
+        try:
+            result = json.loads(raw_response)
+        except json.JSONDecodeError:
+            pass
+
+        # Attempt 2: Extract content inside markdown blocks if present
+        if result is None:
+            code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_response, re.DOTALL)
+            if code_block_match:
+                try:
+                    result = json.loads(code_block_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+        # Attempt 3: Scavenge the raw string for the first outer curly braces { ... }
+        if result is None:
+            braces_match = re.search(r"(\{.*\})", raw_response, re.DOTALL)
+            if braces_match:
+                try:
+                    result = json.loads(braces_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+
+        # If all attempts failed, throw a descriptive error containing what the model actually said
+        if result is None or not isinstance(result, dict):
+            raise json.JSONDecodeError(
+                f"Could not extract valid JSON object from model output. Raw output was: {repr(raw_response)}",
+                raw_response,
+                0
+            )
+        # ----------------------------------------
 
         classification = result.get("classification")
         reason = result.get("reason", "")
@@ -223,7 +238,7 @@ def index():
                     q=query,
                     part="snippet",
                     type="video",
-                    maxResults=10,
+                    maxResults=3,
                 ).execute()
 
                 for item in response.get("items", []):
