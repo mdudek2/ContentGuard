@@ -238,7 +238,7 @@ def index():
                     q=query,
                     part="snippet",
                     type="video",
-                    maxResults=3,
+                    maxResults=10,
                 ).execute()
 
                 for item in response.get("items", []):

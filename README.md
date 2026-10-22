@@ -8,5 +8,5 @@ videos from search results.
 - python
 - pip
 - Ollama
-- ahmadwaqar/smolvlm2-500m-video:latest
+- minicpm-v4.6:latest
 - A Google Developer Account and API key (Needed to communicate with the Youtube API)
