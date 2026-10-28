@@ -1,27 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ContentGuard Safety Filter</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  </head>
-  <body>
-    <h1>ContentGuard Safety Filter</h1>
-    <p> Search YouTube for videos whose thumbnails pass AI-assisted content moderation. </p>
-    <form action="/" method="POST">
-      <input type="text" name="search_query" placeholder="Search YouTube..." value="{{ query }}" required>
-      <button type="submit">Search</button>
-    </form> {% if query %} <h2>Search Results for "{{ query }}":</h2> {% if results %} <p class="status"> {{ results|length }} video(s) passed the thumbnail filter. </p>
-    <div class="results-grid"> {% for video in results %} <div class="card">
-        <a href="https://www.youtube.com/watch?v={{ video.videoid }}" target="blank" rel="noopener noreferrer" aria-label="Watch {{ video.title }}">
-          <img src="{{ video.thumbnail }}" alt="Thumbnail for {{ video.title }}" loading="lazy">
-        </a>
-        <div class="card-content">
-          <div class="card-title"> {{ video.title }} </div>
-          <div class="card-channel"> {{ video.channel }} </div>
-          <a class="watch-link" href="https://www.youtube.com/watch?v={{ video.videoid }}" target="blank" rel="noopener noreferrer"> Watch Video &rarr; </a>
-        </div>
-      </div> {% endfor %} </div> {% else %} <p class="empty-results"> No videos passed the thumbnail filter. Try another search. </p> {% endif %} {% endif %}
-  </body>
+
+<head>
+  <meta charset="UTF-8">
+  <title>ContentGuard Safety Platform</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+  <h1>ContentGuard Safety Platform</h1>
+
+  <form id="search-form" onsubmit="startSearch(event)">
+    <input type="text" id="search-query" name="search_query" value="{{ query|default('') }}" placeholder="Search YouTube videos..." required>
+    <button type="submit">Search</button>
+  </form>
+
+  <div id="loading-indicator">
+    <div class="spinner"></div>
+    <span id="loading-text">Making sure results are safe...</span>
+  </div>
+
+  <div id="results-container" class="results-grid"></div>
+
+  <!-- External JavaScript File -->
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+
 </html>

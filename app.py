@@ -7,7 +7,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, Response, send_from_directory
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 
@@ -96,11 +96,6 @@ def download_thumbnail(video_id, thumbnails):
 
     return None
 
-import base64
-import json
-import re
-import requests
-
 def moderate_thumbnail(image_path):
     """Classify a thumbnail using Ollama with a robust regex JSON scavenger."""
     raw_response = ""
@@ -136,7 +131,7 @@ def moderate_thumbnail(image_path):
             ],
             "options": {
                 "temperature": 0,
-                "num_predict": 400,
+                "num_predict": 500,
             },
         }
 
@@ -224,83 +219,83 @@ def moderate_thumbnail(image_path):
     ) as exc:
         return "ERROR", "", raw_response, str(exc)
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/")
 def index():
-    query = ""
-    results = []
+    """Renders the main search and container page layout."""
+    return render_template("index.html")
 
-    if request.method == "POST":
-        query = request.form.get("search_query", "").strip()
+@app.route("/stream-search")
+def stream_search():
+    """Streams each video processing result individually back to the browser via SSE."""
+    query = request.args.get("q", "").strip()
 
-        if query and youtube:
-            try:
-                response = youtube.search().list(
-                    q=query,
-                    part="snippet",
-                    type="video",
-                    maxResults=10,
-                ).execute()
+    def generate():
+        if not query or not youtube:
+            return
 
-                for item in response.get("items", []):
-                    snippet = item["snippet"]
-                    video_id = item["id"]["videoId"]
-                    title = snippet.get("title", "")
+        try:
+            response = youtube.search().list(
+                q=query,
+                part="snippet",
+                type="video",
+                maxResults=10,
+            ).execute()
 
-                    image_path = download_thumbnail(
-                        video_id,
-                        snippet.get("thumbnails", {}),
-                    )
+            for item in response.get("items", []):
+                snippet = item["snippet"]
+                video_id = item["id"]["videoId"]
+                title = snippet.get("title", "")
+                channel = snippet.get("channelTitle", "")
 
-                    if image_path is None:
-                        log_result(
-                            video_id,
-                            title,
-                            "ERROR",
-                            error="Thumbnail download failed",
-                        )
-                        continue
+                image_path = download_thumbnail(
+                    video_id,
+                    snippet.get("thumbnails", {}),
+                )
 
-                    classification, reason, raw, error = (
-                        moderate_thumbnail(image_path)
-                    )
-
-                    # Log every attempted classification.
+                if image_path is None:
                     log_result(
-                        video_id=video_id,
-                        title=title,
-                        classification=classification,
-                        reason=reason,
-                        raw_response=raw,
-                        error=error,
+                        video_id,
+                        title,
+                        "ERROR",
+                        error="Thumbnail download failed",
                     )
+                    continue
 
-                    # Fail closed: only explicitly SAFE results
-                    # are allowed onto the page.
-                    if classification != "SAFE":
-                        continue
+                classification, reason, raw, error = (
+                    moderate_thumbnail(image_path)
+                )
 
-                    thumbnails = snippet.get("thumbnails", {})
-                    medium_thumbnail = thumbnails.get("medium", {})
-                    thumbnail_url = medium_thumbnail.get("url", "")
+                # Log every attempted classification.
+                log_result(
+                    video_id=video_id,
+                    title=title,
+                    classification=classification,
+                    reason=reason,
+                    raw_response=raw,
+                    error=error,
+                )
 
-                    results.append({
-                        "title": title,
-                        "thumbnail": thumbnail_url,
-                        "local_thumbnail": (
-                            f"/thumbnails/{video_id}.jpg"
-                        ),
-                        "video_id": video_id,
-                        "channel": snippet.get("channelTitle", ""),
-                    })
+                # Fail closed: only explicitly SAFE results go onto the page.
+                if classification != "SAFE":
+                    continue
 
-            except Exception:
-                app.logger.exception("YouTube search failed")
+                result_data = {
+                    "title": title,
+                    "local_thumbnail": f"/thumbnails/{video_id}.jpg",
+                    "video_id": video_id,
+                    "channel": channel,
+                }
 
-    return render_template(
-        "index.html",
-        query=query,
-        results=results,
-    )
+                # Push data chunk to browser via Server-Sent Events
+                yield f"data: {json.dumps(result_data)}\n\n"
+
+        except Exception:
+            app.logger.exception("YouTube search stream failed")
+
+        # Send terminal signal indicating completion
+        yield "data: [DONE]\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
 
 @app.route("/thumbnails/<video_id>.jpg")
 def serve_thumbnail(video_id):
@@ -308,12 +303,11 @@ def serve_thumbnail(video_id):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", video_id):
         return "Not found", 404
 
-    from flask import send_from_directory
-
     return send_from_directory(
         str(THUMBNAIL_DIR.resolve()),
         f"{video_id}.jpg",
     )
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    # Ensure threaded=True so Flask can manage concurrent event streaming and background tasks smoothly
+    app.run(debug=True, threaded=True)
