@@ -11,7 +11,8 @@ def clear_directory(directory):
             shutil.rmtree(path)
 
 target_directory = r"thumbnails"
-
+clear_directory(target_directory)
+target_directory = r"videos"
 clear_directory(target_directory)
 
 print("Directory contents deleted successfully.")

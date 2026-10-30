@@ -29,14 +29,13 @@ function startSearch(event) {
             const card = document.createElement('div');
             card.className = 'card';
             card.innerHTML = `
-                <a href="https://www.youtube.com/watch?v=${video.video_id}" target="_blank">
+                <a href="/watch/${video.video_id}">
                     <img src="${video.local_thumbnail}" alt="${escapeHtml(video.title)}">
                 </a>
                 <div class="card-body">
                     <h3 class="card-title">${escapeHtml(video.title)}</h3>
                     <div class="card-channel">${escapeHtml(video.channel)}</div>
-                </div>
-            `;
+                </div>`           ;
             container.appendChild(card);
         } catch (err) {
             console.error("Failed to parse incoming video payload", err);

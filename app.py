@@ -7,9 +7,10 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
-from flask import Flask, render_template, request, Response, send_from_directory
+from flask import Flask, render_template, request, Response, send_from_directory, abort
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
+import yt_dlp
 
 load_dotenv()
 
@@ -20,6 +21,7 @@ CSV_PATH = Path("./thumbnail_moderation.csv")
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "minicpm-v4.6:latest"
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+VIDEO_FOLDER = Path("./videos")
 
 app = Flask(__name__)
 
@@ -72,6 +74,12 @@ def log_result(video_id, title, classification, reason="", raw_response="", erro
             writer.writerow(row)
 
 def download_thumbnail(video_id, thumbnails):
+    
+    # call the function to download a video
+    base_url="https://www.youtube.com/watch?v="
+    full_vid_path = base_url + video_id
+    download_video(full_vid_path, VIDEO_FOLDER)
+
     """Download a thumbnail and return its local path."""
     for size in ("maxres", "standard", "high", "medium", "default"):
         thumbnail = thumbnails.get(size)
@@ -95,6 +103,23 @@ def download_thumbnail(video_id, thumbnails):
             continue
 
     return None
+
+def download_video(youtube_url: str, output_path: str = ".") -> None:
+    """Download one video from a URL to the specified directory."""
+    options = {
+        "outtmpl": f"{output_path}/%(id)s",
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([youtube_url])
+        print("Download completed successfully!")
+
+    except yt_dlp.utils.DownloadError as e:
+        print(f"Download failed: {e}")
 
 def moderate_thumbnail(image_path):
     """Classify a thumbnail using Ollama with a robust regex JSON scavenger."""
@@ -238,7 +263,7 @@ def stream_search():
                 q=query,
                 part="snippet",
                 type="video",
-                maxResults=10,
+                maxResults=3,
             ).execute()
 
             for item in response.get("items", []):
@@ -307,6 +332,23 @@ def serve_thumbnail(video_id):
         str(THUMBNAIL_DIR.resolve()),
         f"{video_id}.jpg",
     )
+
+@app.route("/watch/<video_id>")
+def watch(video_id):
+    return render_template(
+        "watch.html",
+        video_id=video_id
+    )
+
+
+@app.route("/videos/<video_id>")
+def serve_video(video_id):
+    filename = f"{video_id}.mp4"
+
+    if not os.path.isfile(os.path.join(VIDEO_FOLDER, filename)):
+        abort(404)
+
+    return send_from_directory(VIDEO_FOLDER, filename)
 
 if __name__ == "__main__":
     # Ensure threaded=True so Flask can manage concurrent event streaming and background tasks smoothly
