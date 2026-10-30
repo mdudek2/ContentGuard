@@ -107,8 +107,8 @@ def download_thumbnail(video_id, thumbnails):
 def download_video(youtube_url: str, output_path: str = ".") -> None:
     """Download one video from a URL to the specified directory."""
     options = {
-        "outtmpl": f"{output_path}/%(id)s",
-        "format": "bestvideo+bestaudio/best",
+        "outtmpl": f"{output_path}/%(id)s/%(id)s",
+        "format": "bestvideo[height<=720]+bestaudio/best[height<=720]",
         "merge_output_format": "mp4",
         "noplaylist": True,
     }
@@ -343,7 +343,7 @@ def watch(video_id):
 
 @app.route("/videos/<video_id>")
 def serve_video(video_id):
-    filename = f"{video_id}.mp4"
+    filename = f"{video_id}/{video_id}.mp4"
 
     if not os.path.isfile(os.path.join(VIDEO_FOLDER, filename)):
         abort(404)
