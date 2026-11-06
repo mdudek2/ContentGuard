@@ -11,6 +11,7 @@ from flask import Flask, render_template, request, Response, send_from_directory
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import yt_dlp
+import cv2
 
 load_dotenv()
 
@@ -244,6 +245,54 @@ def moderate_thumbnail(image_path):
     ) as exc:
         return "ERROR", "", raw_response, str(exc)
 
+def extract_frames(video_path, output_dir=None):
+    """
+    Extracts 1 frame every two seconds from a video file.
+    
+    Args:
+        video_path (str): Path to the video file.
+        output_dir (str, optional): Directory to save extracted frames. 
+                                    Defaults to a folder named after the video file.
+    """
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+    if output_dir is None:
+        base_name = os.path.splitext(os.path.basename(video_path))[0]
+        output_dir = os.path.join(os.path.dirname(video_path), f"{base_name}_frames")
+        
+    os.makedirs(output_dir, exist_ok=True)
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video: {video_path}")
+        
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0:
+        fps = 30.0  # Fallback frame rate if metadata is unavailable
+        
+    # Calculate how many frames correspond to 2 seconds
+    frame_interval = int(round(fps * 2))
+    
+    frame_count = 0
+    saved_count = 0
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Save a frame every 2 seconds
+        if frame_count % frame_interval == 0:
+            output_filename = os.path.join(output_dir, f"frame_{saved_count:04d}.jpg")
+            cv2.imwrite(output_filename, frame)
+            saved_count += 1
+            
+        frame_count += 1
+        
+    cap.release()
+    print(f"Successfully extracted {saved_count} frames to: {output_dir}")
+
 @app.route("/")
 def index():
     """Renders the main search and container page layout."""
@@ -343,7 +392,15 @@ def watch(video_id):
 
 @app.route("/videos/<video_id>")
 def serve_video(video_id):
+
+    # path to video
     filename = f"{video_id}/{video_id}.mp4"
+
+    # 1. Build the path safely using pathlib
+    video_path = Path("videos") / video_id / f"{video_id}.mp4"
+
+    # 2. Pass it to your function (convert to string since OpenCV expects a string path)
+    extract_frames(str(video_path))
 
     if not os.path.isfile(os.path.join(VIDEO_FOLDER, filename)):
         abort(404)
