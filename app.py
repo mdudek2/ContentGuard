@@ -3,6 +3,7 @@ import csv
 import json
 import base64
 import re
+import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -245,53 +246,123 @@ def moderate_thumbnail(image_path):
     ) as exc:
         return "ERROR", "", raw_response, str(exc)
 
-def extract_frames(video_path, output_dir=None):
+def moderate_frame(frame):
+    """Classifies an OpenCV frame array using Ollama VLM."""
+    raw_response = ""
+    try:
+        # Encode OpenCV frame directly to JPEG bytes in memory
+        success, encoded_image = cv2.imencode('.jpg', frame)
+        if not success:
+            return "ERROR", "Failed to encode frame", "", "Image encoding error"
+            
+        image_base64 = base64.b64encode(encoded_image.tobytes()).decode("utf-8")
+
+        payload = {
+            "model": OLLAMA_MODEL,
+            "stream": False,
+            "format": "json",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict API microservice. Your ONLY output must be a raw JSON object "
+                        "with no markdown formatting, no code blocks, and no extra text. "
+                        "The JSON must look like this exact template: "
+                        '{"classification": "SAFE", "reason": "short sentence here"}\n'
+                        "Rules:\n"
+                        "1. classification must be 'SAFE' or 'INAPPROPRIATE'.\n"
+                        "2. reason must be under 15 words.\n"
+                        "3. Do not include markdown ticks like ```json."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": "Classify this video frame now.",
+                    "images": [image_base64],
+                },
+            ],
+            "options": {
+                "temperature": 0,
+                "num_predict": 500,
+            },
+        }
+
+        response = requests.post(OLLAMA_URL, json=payload, timeout=120)
+        response.raise_for_status()
+
+        response_data = response.json()
+        raw_response = response_data.get("message", {}).get("content", "").strip()
+
+        # JSON Extraction & Repair (same robust parsing you use)
+        result = None
+        for pattern in [
+            lambda r: json.loads(r),
+            lambda r: json.loads(re.search(r"```(?:json)?\s*(\{.*?\})\s*```", r, re.DOTALL).group(1)),
+            lambda r: json.loads(re.search(r"(\{.*\})", r, re.DOTALL).group(1))
+        ]:
+            try:
+                result = pattern(raw_response)
+                break
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        if result is None or not isinstance(result, dict):
+            raise json.JSONDecodeError(f"Could not extract valid JSON. Raw: {repr(raw_response)}", raw_response, 0)
+
+        classification = result.get("classification")
+        reason = result.get("reason", "")
+
+        if classification not in ("SAFE", "INAPPROPRIATE"):
+            return "ERROR", str(reason), raw_response, "Unknown classification"
+
+        return classification, reason, raw_response, ""
+
+    except Exception as exc:
+        return "ERROR", "", raw_response, str(exc)
+
+def check_video_safety(video_path, max_strikes=3, test_mode=True):
     """
-    Extracts 1 frame every two seconds from a video file.
-    
-    Args:
-        video_path (str): Path to the video file.
-        output_dir (str, optional): Directory to save extracted frames. 
-                                    Defaults to a folder named after the video file.
+    Extracts frames at 2-second intervals and checks them against the VLM.
+    Set test_mode=True to force strikes on every checked frame for testing.
     """
-    if not os.path.exists(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-        
-    if output_dir is None:
-        base_name = os.path.splitext(os.path.basename(video_path))[0]
-        output_dir = os.path.join(os.path.dirname(video_path), f"{base_name}_frames")
-        
-    os.makedirs(output_dir, exist_ok=True)
-    
-    cap = cv2.VideoCapture(video_path)
+    cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
         
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        fps = 30.0  # Fallback frame rate if metadata is unavailable
+        fps = 30.0
         
-    # Calculate how many frames correspond to 2 seconds
     frame_interval = int(round(fps * 2))
-    
     frame_count = 0
-    saved_count = 0
-    
+    strikes = 0
+    flagged_reasons = []
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
             
-        # Save a frame every 2 seconds
         if frame_count % frame_interval == 0:
-            output_filename = os.path.join(output_dir, f"frame_{saved_count:04d}.jpg")
-            cv2.imwrite(output_filename, frame)
-            saved_count += 1
+            if test_mode:
+                # Force a fake strike immediately for testing purposes
+                classification, reason = "INAPPROPRIATE", "Manual test trigger"
+            else:
+                classification, reason, _, err = moderate_frame(frame)
             
+            if classification == "INAPPROPRIATE":
+                strikes += 1
+                flagged_reasons.append(f"Frame at ~{frame_count / fps:.1f}s: {reason}")
+                print(f"[TEST STRIKE {strikes}/{max_strikes}] Triggered!")
+                
+                if strikes >= max_strikes:
+                    cap.release()
+                    return False, flagged_reasons
+                    
         frame_count += 1
         
     cap.release()
-    print(f"Successfully extracted {saved_count} frames to: {output_dir}")
+    return True, flagged_reasons
 
 @app.route("/")
 def index():
@@ -389,23 +460,24 @@ def watch(video_id):
         video_id=video_id
     )
 
-
 @app.route("/videos/<video_id>")
 def serve_video(video_id):
-
-    # path to video
-    filename = f"{video_id}/{video_id}.mp4"
-
     # 1. Build the path safely using pathlib
     video_path = Path("videos") / video_id / f"{video_id}.mp4"
-
-    # 2. Pass it to your function (convert to string since OpenCV expects a string path)
-    extract_frames(str(video_path))
-
-    if not os.path.isfile(os.path.join(VIDEO_FOLDER, filename)):
+    
+    if not video_path.is_file():
         abort(404)
 
-    return send_from_directory(VIDEO_FOLDER, filename)
+    # 2. Run the 3-strikes frame moderation check
+    is_safe, reasons = check_video_safety(video_path, max_strikes=3)
+    
+    if not is_safe:
+        # Force stop / block playback
+        print(f"Video {video_id} blocked due to safety violations: {reasons}")
+        abort(403, description="Playback blocked: Video violated content guidelines (3 strikes reached).")
+
+    # 3. If safe, serve the video file normally
+    return send_from_directory(VIDEO_FOLDER, f"{video_id}/{video_id}.mp4")
 
 if __name__ == "__main__":
     # Ensure threaded=True so Flask can manage concurrent event streaming and background tasks smoothly
