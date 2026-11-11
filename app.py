@@ -5,6 +5,7 @@ import base64
 import re
 import json
 import threading
+import queue
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
@@ -320,7 +321,7 @@ def moderate_frame(frame):
     except Exception as exc:
         return "ERROR", "", raw_response, str(exc)
 
-def check_video_safety(video_path, max_strikes=3, test_mode=True):
+def check_video_safety(video_path, max_strikes=3, test_mode=False):
     """
     Extracts frames at 2-second intervals and checks them against the VLM.
     Set test_mode=True to force strikes on every checked frame for testing.
@@ -444,7 +445,7 @@ def stream_search():
 
 @app.route("/thumbnails/<video_id>.jpg")
 def serve_thumbnail(video_id):
-    # Restrict filenames to expected YouTube video ID characters.
+    # Restrict filenames to video ID characters.
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", video_id):
         return "Not found", 404
 
@@ -460,24 +461,60 @@ def watch(video_id):
         video_id=video_id
     )
 
+# Store active analysis states in memory (or use Redis/cache for production)
+analysis_status = {}
+
 @app.route("/videos/<video_id>")
 def serve_video(video_id):
-    # 1. Build the path safely using pathlib
+    """Serve the video file immediately without blocking moderation."""
     video_path = Path("videos") / video_id / f"{video_id}.mp4"
-    
     if not video_path.is_file():
         abort(404)
-
-    # 2. Run the 3-strikes frame moderation check
-    is_safe, reasons = check_video_safety(video_path, max_strikes=3)
-    
-    if not is_safe:
-        # Force stop / block playback
-        print(f"Video {video_id} blocked due to safety violations: {reasons}")
-        abort(403, description="Playback blocked: Video violated content guidelines (3 strikes reached).")
-
-    # 3. If safe, serve the video file normally
     return send_from_directory(VIDEO_FOLDER, f"{video_id}/{video_id}.mp4")
+
+@app.route("/watch-status/<video_id>")
+def watch_status(video_id):
+    """SSE endpoint that runs frame analysis in the background and streams status."""
+    def generate():
+        video_path = Path("videos") / video_id / f"{video_id}.mp4"
+        if not video_path.is_file():
+            yield f"data: {json.dumps({'status': 'error', 'message': 'Video not found'})}\n\n"
+            return
+
+        # Generator wrapper around check_video_safety for streaming updates
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            yield f"data: {json.dumps({'status': 'error', 'message': 'Could not open video'})}\n\n"
+            return
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_interval = int(round(fps * 2))
+        frame_count = 0
+        strikes = 0
+        max_strikes = 3
+
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_count % frame_interval == 0:
+                classification, reason, _, _ = moderate_frame(frame)
+                if classification == "INAPPROPRIATE":
+                    strikes += 1
+                    yield f"data: {json.dumps({'status': 'strike', 'strikes': strikes, 'reason': reason})}\n\n"
+                    
+                    if strikes >= max_strikes:
+                        cap.release()
+                        yield f"data: {json.dumps({'status': 'blocked', 'message': 'Content guidelines violated'})}\n\n"
+                        return
+
+            frame_count += 1
+
+        cap.release()
+        yield f"data: {json.dumps({'status': 'safe'})}\n\n"
+
+    return Response(generate(), mimetype="text/event-stream")
 
 if __name__ == "__main__":
     # Ensure threaded=True so Flask can manage concurrent event streaming and background tasks smoothly

@@ -10,10 +10,37 @@
   <body>
     <h1>Filtered Video Player</h1>
     <div class="player-container">
-      <video controls preload="metadata">
+      <video id="videoPlayer" controls preload="metadata" autoplay>
         <source src="{{ url_for('serve_video', video_id=video_id) }}" type="video/mp4"> Your browser does not support HTML5 video.
       </video>
     </div>
     <a href="{{ url_for('index') }}" class="back-btn"> &larr; Back to Search </a>
+
+    <script>
+        const videoId = "{{ video_id }}";
+        const videoPlayer = document.getElementById('videoPlayer');
+        const eventSource = new EventSource(`/watch-status/${videoId}`);
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            
+            if (data.status === 'strike') {
+                console.warn(`Safety strike ${data.strikes}/3: ${data.reason}`);
+            } else if (data.status === 'blocked') {
+                eventSource.close();
+                videoPlayer.pause();
+                alert("Playback blocked: Video violated content guidelines (3 strikes reached).");
+                window.location.href = "{{ url_for('index') }}";
+            } else if (data.status === 'safe') {
+                console.log("Video analysis completed successfully. Content is safe.");
+                eventSource.close();
+            }
+        };
+
+        eventSource.onerror = function(err) {
+            console.error("Moderation stream error:", err);
+            eventSource.close();
+        };
+    </script>
   </body>
 </html>
